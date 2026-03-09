@@ -20,6 +20,8 @@ import com.swmansion.enriched.markdown.utils.text.TailFadeInAnimator
 import com.swmansion.enriched.markdown.utils.text.interaction.CheckboxTouchHelper
 import com.swmansion.enriched.markdown.utils.text.view.LinkLongPressMovementMethod
 import com.swmansion.enriched.markdown.utils.text.view.applySelectableState
+import com.swmansion.enriched.markdown.utils.text.view.cancelJSTouchForCheckboxTap
+import com.swmansion.enriched.markdown.utils.text.view.cancelJSTouchForLinkTap
 import com.swmansion.enriched.markdown.utils.text.view.emitLinkLongPressEvent
 import com.swmansion.enriched.markdown.utils.text.view.emitLinkPressEvent
 import com.swmansion.enriched.markdown.utils.text.view.setupAsMarkdownTextView
@@ -259,8 +261,17 @@ class EnrichedMarkdownText
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-      if (checkboxTouchHelper.onTouchEvent(event)) return true
-      return super.onTouchEvent(event)
+      if (checkboxTouchHelper.onTouchEvent(event)) {
+        if (event.action == MotionEvent.ACTION_DOWN) {
+          cancelJSTouchForCheckboxTap(event)
+        }
+        return true
+      }
+      val result = super.onTouchEvent(event)
+      if (event.action == MotionEvent.ACTION_DOWN) {
+        cancelJSTouchForLinkTap(event)
+      }
+      return result
     }
 
     companion object {
