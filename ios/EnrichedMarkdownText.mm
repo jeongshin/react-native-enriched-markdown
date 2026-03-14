@@ -302,19 +302,11 @@ using namespace facebook::react;
   });
 }
 
-// Synchronous rendering for mock view measurement (no UI updates needed)
-- (void)renderMarkdownSynchronously:(NSString *)markdownString
+- (NSMutableAttributedString *)parseAndRenderMarkdown:(NSString *)markdownString
 {
-  if (!markdownString || markdownString.length == 0) {
-    return;
-  }
-
-  _blockAsyncRender = YES;
-  _cachedMarkdown = [markdownString copy];
-
   MarkdownASTNode *ast = [_parser parseMarkdown:markdownString flags:_md4cFlags];
   if (!ast) {
-    return;
+    return nil;
   }
 
   AttributedRenderer *renderer = [[AttributedRenderer alloc] initWithConfig:_config];
@@ -331,6 +323,24 @@ using namespace facebook::react;
 
   _accessibilityInfo = [AccessibilityInfo infoFromContext:context];
 
+  return attributedText;
+}
+
+/// Synchronous rendering for mock view measurement (no UI updates needed).
+- (void)renderMarkdownSynchronously:(NSString *)markdownString
+{
+  if (!markdownString || markdownString.length == 0) {
+    return;
+  }
+
+  _blockAsyncRender = YES;
+  _cachedMarkdown = [markdownString copy];
+
+  NSMutableAttributedString *attributedText = [self parseAndRenderMarkdown:markdownString];
+  if (!attributedText) {
+    return;
+  }
+
   _textView.attributedText = attributedText;
   _renderedMarkdown = [_cachedMarkdown copy];
 }
@@ -346,18 +356,38 @@ using namespace facebook::react;
 
   objc_setAssociatedObject(_textView.textContainer, kTextViewKey, _textView, OBJC_ASSOCIATION_ASSIGN);
 
+  // Ensure the text container has unlimited height before setting content.
+  // updateLayoutMetrics may have shrunk the frame (and thus the text container)
+  // from a previous layout pass, which would clip the new attributed text.
+  CGFloat containerWidth = _textView.textContainer.size.width;
+  if (containerWidth <= 0) {
+    containerWidth = self.bounds.size.width;
+  }
+  _textView.textContainer.size = CGSizeMake(containerWidth, CGFLOAT_MAX);
+
   _textView.attributedText = attributedText;
   _renderedMarkdown = [_cachedMarkdown copy];
 
   [_textView.layoutManager invalidateLayoutForCharacterRange:NSMakeRange(0, attributedText.length)
                                         actualCharacterRange:NULL];
 
-  [_textView setNeedsLayout];
-  [_textView setNeedsDisplay];
-  [self setNeedsLayout];
+  // When bounds width is zero (recycled view not yet laid out), skip layout
+  // and measurement — didMoveToWindow will handle it once the view has real
+  // bounds. Measuring with width=0 produces a bogus single-line measurement
+  // that corrupts the height sent to Yoga.
+  if (self.bounds.size.width > 0) {
+    [_textView.layoutManager ensureLayoutForTextContainer:_textView.textContainer];
+    [_textView layoutIfNeeded];
 
-  if (needsHeightUpdate([self measureSize:self.bounds.size.width], self.bounds)) {
-    [self requestHeightUpdate];
+    [_textView setNeedsDisplay];
+    [self setNeedsLayout];
+
+    CGSize measured = [self measureSize:self.bounds.size.width];
+    BOOL needsUpdate = needsHeightUpdate(measured, self.bounds);
+
+    if (needsUpdate) {
+      [self requestHeightUpdate];
+    }
   }
 
   _accessibilityNeedsRebuild = YES;
@@ -471,18 +501,24 @@ using namespace facebook::react;
     _textView.hidden = NO;
     _textView.contentOffset = CGPointZero;
 
+    _textView.frame = self.bounds;
+    _textView.textContainer.size = CGSizeMake(self.bounds.size.width, CGFLOAT_MAX);
+
     NSAttributedString *text = _textView.attributedText;
     if (text.length > 0) {
       [_textView.layoutManager invalidateLayoutForCharacterRange:NSMakeRange(0, text.length) actualCharacterRange:NULL];
+      [_textView.layoutManager ensureLayoutForTextContainer:_textView.textContainer];
     }
 
-    _textView.frame = self.bounds;
-    _textView.textContainer.size = CGSizeMake(self.bounds.size.width, CGFLOAT_MAX);
-    [_textView setNeedsLayout];
     [_textView layoutIfNeeded];
     [_textView setNeedsDisplay];
 
-    [self requestHeightUpdate];
+    CGSize measured = [self measureSize:self.bounds.size.width];
+    BOOL needsUpdate = needsHeightUpdate(measured, self.bounds);
+
+    if (needsUpdate) {
+      [self requestHeightUpdate];
+    }
   }
 }
 

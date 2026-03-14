@@ -356,22 +356,15 @@ using namespace facebook::react;
   });
 }
 
-- (void)renderMarkdownSynchronously:(NSString *)markdownString
+- (NSArray *)parseAndRenderSegments:(NSString *)markdownString
 {
-  if (!markdownString || markdownString.length == 0) {
-    return;
-  }
-
-  _blockAsyncRender = YES;
-  _cachedMarkdown = [markdownString copy];
-  _renderedMarkdown = [markdownString copy];
-
   MarkdownASTNode *ast = [_parser parseMarkdown:markdownString flags:_md4cFlags];
   if (!ast) {
-    return;
+    return nil;
   }
 
   NSArray *segments = [self splitASTIntoSegments:ast];
+  NSMutableArray *renderedSegments = [NSMutableArray array];
 
   for (id segment in segments) {
     if ([segment isKindOfClass:[EMTextSegment class]]) {
@@ -380,19 +373,54 @@ using namespace facebook::react;
                                             allowTrailingMargin:_allowTrailingMargin
                                                allowFontScaling:_fontScaleObserver.allowFontScaling
                                           maxFontSizeMultiplier:_maxFontSizeMultiplier];
-      EnrichedMarkdownInternalText *view = [self createTextViewForRenderedSegment:rendered];
+      [renderedSegments addObject:rendered];
+    } else if ([segment isKindOfClass:[EMTableSegment class]]) {
+      [renderedSegments addObject:segment];
+    }
+#if ENRICHED_MARKDOWN_MATH
+    else if ([segment isKindOfClass:[EMMathSegment class]]) {
+      [renderedSegments addObject:segment];
+    }
+#endif
+  }
+
+  return renderedSegments;
+}
+
+/// Synchronous rendering for mock view measurement (no UI updates needed).
+- (void)renderMarkdownSynchronously:(NSString *)markdownString
+{
+  if (!markdownString || markdownString.length == 0) {
+    return;
+  }
+
+  for (UIView *view in _segmentViews) {
+    [view removeFromSuperview];
+  }
+  [_segmentViews removeAllObjects];
+
+  _blockAsyncRender = YES;
+  _cachedMarkdown = [markdownString copy];
+  _renderedMarkdown = [markdownString copy];
+
+  NSArray *renderedSegments = [self parseAndRenderSegments:markdownString];
+  if (!renderedSegments) {
+    return;
+  }
+
+  for (id segment in renderedSegments) {
+    if ([segment isKindOfClass:[EMRenderedTextSegment class]]) {
+      EnrichedMarkdownInternalText *view = [self createTextViewForRenderedSegment:(EMRenderedTextSegment *)segment];
       [_segmentViews addObject:view];
       [self addSubview:view];
     } else if ([segment isKindOfClass:[EMTableSegment class]]) {
-      EMTableSegment *tableSegment = (EMTableSegment *)segment;
-      TableContainerView *tableView = [self createTableViewForSegment:tableSegment];
+      TableContainerView *tableView = [self createTableViewForSegment:(EMTableSegment *)segment];
       [_segmentViews addObject:tableView];
       [self addSubview:tableView];
     }
 #if ENRICHED_MARKDOWN_MATH
     else if ([segment isKindOfClass:[EMMathSegment class]]) {
-      EMMathSegment *mathSegment = (EMMathSegment *)segment;
-      ENRMMathContainerView *mathView = [self createMathViewForSegment:mathSegment];
+      ENRMMathContainerView *mathView = [self createMathViewForSegment:(EMMathSegment *)segment];
       [_segmentViews addObject:mathView];
       [self addSubview:mathView];
     }
@@ -430,11 +458,17 @@ using namespace facebook::react;
 #endif
   }
 
-  if (needsHeightUpdate([self measureSize:self.bounds.size.width], self.bounds)) {
-    [self requestHeightUpdate];
-  }
+  // When bounds width is zero (recycled view not yet laid out), skip
+  // measurement — didMoveToWindow will handle it once the view has real
+  // bounds. Measuring with width=0 produces a bogus single-line measurement
+  // that corrupts the height sent to Yoga.
+  if (self.bounds.size.width > 0) {
+    [self setNeedsLayout];
 
-  [self setNeedsLayout];
+    if (needsHeightUpdate([self measureSize:self.bounds.size.width], self.bounds)) {
+      [self requestHeightUpdate];
+    }
+  }
 }
 
 - (EMRenderedTextSegment *)renderTextSegment:(EMTextSegment *)textSegment
@@ -615,18 +649,25 @@ using namespace facebook::react;
         EnrichedMarkdownInternalText *textSegment = (EnrichedMarkdownInternalText *)segment;
         UITextView *textView = textSegment.textView;
         textView.contentOffset = CGPointZero;
+
+        textView.frame = textSegment.bounds;
+        textView.textContainer.size = CGSizeMake(textView.bounds.size.width, CGFLOAT_MAX);
+
         if (textView.attributedText.length > 0) {
           [textView.layoutManager invalidateLayoutForCharacterRange:NSMakeRange(0, textView.attributedText.length)
                                                actualCharacterRange:NULL];
-          textView.textContainer.size = CGSizeMake(textView.bounds.size.width, CGFLOAT_MAX);
-          [textView setNeedsLayout];
-          [textView layoutIfNeeded];
-          [textView setNeedsDisplay];
+          [textView.layoutManager ensureLayoutForTextContainer:textView.textContainer];
         }
+
+        [textView layoutIfNeeded];
+        [textView setNeedsDisplay];
       }
     }
 
-    [self requestHeightUpdate];
+    CGSize measured = [self measureSize:self.bounds.size.width];
+    if (needsHeightUpdate(measured, self.bounds)) {
+      [self requestHeightUpdate];
+    }
   }
 }
 
