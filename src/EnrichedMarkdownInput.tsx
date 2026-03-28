@@ -56,6 +56,7 @@ export interface ContextMenuItem {
     selection: { start: number; end: number };
     styleState: StyleState;
   }) => void;
+  icon?: string;
   visible?: boolean;
 }
 
@@ -159,7 +160,7 @@ export const EnrichedMarkdownInput = ({
     () =>
       contextMenuItems
         ?.filter((item) => item.visible !== false)
-        .map((item) => ({ text: item.text })),
+        .map((item) => ({ text: item.text, icon: item.icon })),
     [contextMenuItems]
   );
 
