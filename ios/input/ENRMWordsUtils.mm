@@ -24,7 +24,7 @@
   NSCharacterSet *whitespace = [NSCharacterSet whitespaceAndNewlineCharacterSet];
   NSCharacterSet *nonWhitespace = [whitespace invertedSet];
 
-  NSUInteger left = range.location;
+  NSUInteger left = MIN(range.location, textLength);
   if (left > 0) {
     NSRange searchRange = NSMakeRange(0, left);
     NSRange whitespaceHit = [text rangeOfCharacterFromSet:whitespace options:NSBackwardsSearch range:searchRange];
